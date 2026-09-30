@@ -6,4 +6,5 @@ export * from './mana.js';
 export * from './stack.js';
 export * from './combat.js';
 export * from './sba.js';
+export * from './ai.js';
 export * from './deck.js';

@@ -56,12 +56,21 @@ export interface EngineInfo {
 /** 一个动作的结果：成功 ok=true（可带提示），失败 ok=false 且带 error。 */
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
+/** M8：统一的玩家动作（AI 与后端对局协议共用）。 */
+export type GameAction =
+  | { type: 'PASS' }
+  | { type: 'PLAY_LAND'; handIndex: number }
+  | { type: 'ACTIVATE_MANA'; permanentId: string }
+  | { type: 'CAST'; handIndex: number }
+  | { type: 'DECLARE_ATTACKERS'; attackerIds: string[] }
+  | { type: 'DECLARE_BLOCKERS'; blocks: { blockerId: string; attackerId: string }[] };
+
 /** 默认起始牌库（纯引擎内置，供本地 / 测试使用）。 */
 import { buildStarterDeck } from './deck.js';
 
 export class GameEngine {
   static readonly NAME = '@mtg/engine';
-  static readonly VERSION = '0.6.0';
+  static readonly VERSION = '0.7.0';
 
   readonly config: EngineConfig;
   private readonly turnMgr: TurnManager;
@@ -228,6 +237,35 @@ export class GameEngine {
       attackers: [...this._attackers],
       blocks: [...this._blocks].map(([blockerId, attackerId]) => ({ blockerId, attackerId })),
     };
+  }
+
+  /** M8：本回合是否已宣告过攻击者 / 阻挡者（AI 与 UI 判断可用动作）。 */
+  get attackersDeclared(): boolean {
+    return this._attackersDeclared;
+  }
+
+  get blockersDeclared(): boolean {
+    return this._blockersDeclared;
+  }
+
+  /** M8：统一动作入口 —— 把 `GameAction` 分发到对应的具体方法。 */
+  playAction(playerId: string, action: GameAction): ActionResult {
+    switch (action.type) {
+      case 'PASS':
+        return this.pass(playerId);
+      case 'PLAY_LAND':
+        return this.playLand(playerId, action.handIndex);
+      case 'ACTIVATE_MANA':
+        return this.activateMana(playerId, action.permanentId);
+      case 'CAST':
+        return this.castFromHand(playerId, action.handIndex);
+      case 'DECLARE_ATTACKERS':
+        return this.declareAttackers(playerId, action.attackerIds);
+      case 'DECLARE_BLOCKERS':
+        return this.declareBlockers(playerId, action.blocks);
+      default:
+        return err('未知动作');
+    }
   }
 
   /** 推进一个步骤，并在步骤边界挂接规则（重置/抽牌/清空法术力池、重置优先权与让过计数）。 */
