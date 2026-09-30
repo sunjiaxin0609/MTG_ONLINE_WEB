@@ -7,7 +7,14 @@ interface Health {
 
 interface GameEvent {
   type: 'game_event';
-  view: { turn: number; phase: string; activePlayerId: string; players: { id: string; name: string; life: number }[] };
+  view: {
+    turn: number;
+    phase: string;
+    step: string;
+    activePlayerId: string;
+    priorityPlayerId: string;
+    players: { id: string; name: string; life: number }[];
+  };
 }
 
 interface Err {
@@ -83,14 +90,14 @@ export default function App() {
         <div>连接状态：{conn}</div>
         {view ? (
           <ul>
-            <li>回合：{view.turn} · 阶段：{view.phase}</li>
-            <li>主动玩家：{view.activePlayerId}</li>
+            <li>回合：{view.turn} · 阶段：{view.phase} · 步骤：{view.step}</li>
+            <li>主动玩家：{view.activePlayerId} · 优先权：{view.priorityPlayerId}</li>
             <li>生命：{view.players.map((p) => `${p.name}=${p.life}`).join('、')}</li>
           </ul>
         ) : (
           <em>等待对局视图…</em>
         )}
-        <button onClick={advance}>推进阶段</button>
+        <button onClick={advance}>推进步骤</button>
       </section>
 
       {lastError && <p style={{ color: '#b00020' }}>⚠ {lastError}</p>}

@@ -1,6 +1,6 @@
 /**
  * 核心类型定义 —— 万智牌规则引擎（`@mtg/engine`）
- * M1：定义骨架所需的基础类型，后续里程碑在此基础上扩展。
+ * M2：回合从粗粒度 Phase 深化为「阶段 + 步骤」双层结构，并提供优先权地基。
  */
 
 /** 万智牌卡牌基础类型（能力指令模型，详见设计文档第 4 节）。 */
@@ -44,24 +44,6 @@ export type KeywordId = (typeof KEYWORDS)[number];
 /** 游戏区域。 */
 export type Zone = 'library' | 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'stack';
 
-/**
- * 回合的阶段与步骤。
- * 顺序：开始→维持→抽牌→主1→开始战斗→宣告攻击者→宣告阻挡者→战斗伤害→结束战斗→主2→结束→清理。
- */
-export const PHASE_SEQUENCE = [
-  'BEGINNING',
-  'FIRST_MAIN',
-  'BEGIN_COMBAT',
-  'DECLARE_ATTACKERS',
-  'DECLARE_BLOCKERS',
-  'COMBAT_DAMAGE',
-  'END_OF_COMBAT',
-  'SECOND_MAIN',
-  'ENDING',
-] as const;
-
-export type Phase = (typeof PHASE_SEQUENCE)[number];
-
 /** 单个玩家在对局中的状态。 */
 export interface PlayerState {
   id: string;
@@ -71,12 +53,18 @@ export interface PlayerState {
 }
 
 /**
- * 对局引擎的可被观察总视图（简单版，M1 仅提供基础字段）。
- * 后续里程碑会扩展出手牌、战场、堆叠等区域视图。
+ * 对局引擎的可观察总视图（简单版，M2 暴露阶段、步骤与优先权）。
+ * 后续里程碑扩展出手牌、战场、堆叠等区域视图。
  */
 export interface GameView {
   turn: number;
   phase: Phase;
+  step: TurnStep;
   activePlayerId: string;
+  priorityPlayerId: string;
   players: PlayerState[];
 }
+
+// 阶段与步骤类型由 turn.ts 提供
+import type { Phase, TurnStep } from './turn.js';
+export type { Phase, TurnStep };
