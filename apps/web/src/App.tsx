@@ -30,9 +30,13 @@ export default function App() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     wsRef.current = ws;
+    // 每个连接用局部标志记录是否被主动关闭，避免 StrictMode 双挂载连累守卫
+    let intentionallyClosed = false;
     ws.onopen = () => setConn('open');
     ws.onclose = () => setConn('closed');
-    ws.onerror = () => setLastError('WebSocket 连接错误');
+    ws.onerror = () => {
+      if (!intentionallyClosed) setLastError('WebSocket 连接错误');
+    };
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data) as GameEvent | Err;
       if (msg.type === 'error') {
@@ -45,7 +49,10 @@ export default function App() {
       .then((r) => r.json())
       .then(setHealth as never)
       .catch(() => setLastError('无法连接后端 /api/health'));
-    return () => ws.close();
+    return () => {
+      intentionallyClosed = true;
+      ws.close();
+    };
   }, []);
 
   const advance = () => {
