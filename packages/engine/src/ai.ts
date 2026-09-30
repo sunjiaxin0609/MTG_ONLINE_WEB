@@ -190,13 +190,13 @@ export function decideAction(engine: GameEngine, actor: string): GameAction {
 export function currentActor(engine: GameEngine, aiIds: Set<string>): string | null {
   if (engine.isOver) return null;
   const step = engine.currentStep;
-  if (step === 'DECLARE_ATTACKERS' && !engine.attackersDeclared) {
-    const a = engine.activePlayerId;
-    return aiIds.has(a) ? a : null;
+  // 宣告攻击者：由 AI 主动玩家负责宣告；否则交回优先权判断（让持有优先权的 AI 让过以推进）
+  if (step === 'DECLARE_ATTACKERS' && !engine.attackersDeclared && aiIds.has(engine.activePlayerId)) {
+    return engine.activePlayerId;
   }
-  if (step === 'DECLARE_BLOCKERS' && !engine.blockersDeclared) {
-    const d = engine.defenderId;
-    return aiIds.has(d) ? d : null;
+  // 宣告阻挡者：由 AI 防御玩家负责宣告；否则交回优先权判断
+  if (step === 'DECLARE_BLOCKERS' && !engine.blockersDeclared && aiIds.has(engine.defenderId)) {
+    return engine.defenderId;
   }
   const priority = engine.priorityPlayerId;
   return aiIds.has(priority) ? priority : null;
@@ -216,9 +216,14 @@ function fallbackAction(engine: GameEngine, actor: string): GameAction {
 
 /**
  * 驱动所有 AI 持续行动，直到"该人类输入"或对局结束。
+ * 每个实际执行的动作都会回调 `onAction`（用于会话层记录事件流）。
  * `aiIds` 为受控 AI 的玩家 id 集合；剩余玩家被视为人类，需要外部输入。
  */
-export function runAi(engine: GameEngine, aiIds: Iterable<string>): void {
+export function runAiWith(
+  engine: GameEngine,
+  aiIds: Iterable<string>,
+  onAction?: (actor: string, action: GameAction, message: string) => void,
+): void {
   const set = new Set(aiIds);
   let safety = 0;
   while (!engine.isOver && safety < MAX_STEPS) {
@@ -228,9 +233,19 @@ export function runAi(engine: GameEngine, aiIds: Iterable<string>): void {
 
     const action = decideAction(engine, actor);
     const result = engine.playAction(actor, action);
-    if (!result.ok) {
-      // 决策非法时用兜底动作保证推进；若兜底也失败则退出，避免死循环
-      if (!engine.playAction(actor, fallbackAction(engine, actor)).ok) break;
+    if (result.ok) {
+      onAction?.(actor, action, result.message ?? action.type);
+      continue;
     }
+    // 决策非法时用兜底动作保证推进；若兜底也失败则退出，避免死循环
+    const fb = fallbackAction(engine, actor);
+    const fbResult = engine.playAction(actor, fb);
+    if (!fbResult.ok) break;
+    onAction?.(actor, fb, fbResult.message ?? fb.type);
   }
+}
+
+/** 驱动所有 AI 行动（无事件回调的便捷形式）。 */
+export function runAi(engine: GameEngine, aiIds: Iterable<string>): void {
+  runAiWith(engine, aiIds);
 }
