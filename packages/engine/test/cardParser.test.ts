@@ -58,14 +58,6 @@ describe('关键字能力', () => {
 });
 
 describe('产出法术力的启动式异能', () => {
-  it('基础地 Plains：{T}: Add {W}.', () => {
-    const r = parse(raw({ type_line: 'Basic Land — Plains', oracle_text: '({T}: Add {W}.)' }));
-    // 提醒行跳过，但无实际能力行（纯提醒）→ 仍是地，无能力
-    expect(r.supported).toBe(true);
-    expect(r.card?.category).toBe('land');
-    expect(r.card?.abilities).toEqual([]);
-  });
-
   it('精灵产绿：{T}: Add {G}.  → ACTIVATED TAP ADD_MANA', () => {
     const r = parse(
       raw({
@@ -137,6 +129,35 @@ describe('灵气', () => {
     expect(r.supported).toBe(true);
     expect(r.card?.category).toBe('aura');
     expect(r.card?.abilities[0].effect.kind).toBe('AURA');
+  });
+});
+
+describe('基本地', () => {
+  // Scryfall 上基本地的产费写作提醒文字（整行括号），按副类别补齐
+  const basics: [string, string, string][] = [
+    ['Plains', 'W', '({T}: Add {W}.)'],
+    ['Island', 'U', '({T}: Add {U}.)'],
+    ['Swamp', 'B', '({T}: Add {B}.)'],
+    ['Mountain', 'R', '({T}: Add {R}.)'],
+    ['Forest', 'G', '({T}: Add {G}.)'],
+  ];
+
+  it.each(basics)('%s 应具备横置产 %s 的异能', (name, color, oracle) => {
+    const r = parse(raw({ name, type_line: `Basic Land — ${name}`, colors: [], oracle_text: oracle }));
+    expect(r.supported).toBe(true);
+    expect(r.card?.abilities).toEqual([
+      { type: 'ACTIVATED', cost: { type: 'TAP' }, effect: { kind: 'ADD_MANA', color, amount: 1 } },
+    ]);
+  });
+
+  it('雪境基本地同样按副类别补齐', () => {
+    const r = parse(raw({ name: 'Snow-Covered Forest', type_line: 'Basic Snow Land — Forest', colors: [], oracle_text: '({T}: Add {G}.)' }));
+    expect(r.card?.abilities[0].effect).toEqual({ kind: 'ADD_MANA', color: 'G', amount: 1 });
+  });
+
+  it('已解析出产费异能的地不重复补齐', () => {
+    const r = parse(raw({ name: 'Plains', type_line: 'Basic Land — Plains', colors: [], oracle_text: '{T}: Add {W}.' }));
+    expect(r.card?.abilities.length).toBe(1);
   });
 });
 

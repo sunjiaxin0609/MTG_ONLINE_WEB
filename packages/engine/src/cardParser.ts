@@ -57,6 +57,28 @@ const KEYWORD_WORD: Record<string, KeywordId> = {
 
 const REMINDER_RE = /^\(.*\)$/;
 
+/**
+ * 基本地副类别 → 产费颜色。
+ * Scryfall 上基本地的 Oracle 文本写作提醒文字形式（如 "({T}: Add {G}.)"），
+ * 会被提醒文字规则整行跳过；按万智牌规则，基本地本身即具有对应产费异能，故按副类别补齐。
+ */
+const BASIC_LAND_MANA: Record<string, ManaSymbol> = {
+  Plains: 'W',
+  Island: 'U',
+  Swamp: 'B',
+  Mountain: 'R',
+  Forest: 'G',
+  Wastes: 'C',
+};
+
+/** 从类型行取出基本地副类别（如 "Basic Land — Forest" → "Forest"）。 */
+function basicLandSubtype(typeLine: string): string | null {
+  const m = typeLine.match(/\bBasic\b[^—]*—\s*(.+)$/);
+  if (!m) return null;
+  const subtype = m[1].trim();
+  return subtype in BASIC_LAND_MANA ? subtype : null;
+}
+
 /** 判定卡是否在标准赛合法（legalities.standard === 'legal'）。 */
 export function isStandardLegal(raw: ScryfallCardRaw): boolean {
   return raw.legalities?.standard === 'legal';
@@ -250,6 +272,19 @@ export function parseScryfallCard(raw: ScryfallCardRaw): ParseCardResult {
       return { card: null, supported: false, reason: `无法解析能力行: "${line}"` };
     }
     abilities.push(...parsed.abilities);
+  }
+
+  // 基本地：Oracle 文本是提醒文字形式，会被跳过，这里按副类别补齐产费异能
+  if (category === 'land') {
+    const subtype = basicLandSubtype(typeLine);
+    const hasMana = abilities.some((a) => a.type === 'ACTIVATED' && a.effect.kind === 'ADD_MANA');
+    if (subtype && !hasMana) {
+      abilities.push({
+        type: 'ACTIVATED',
+        cost: { type: 'TAP' },
+        effect: { kind: 'ADD_MANA', color: BASIC_LAND_MANA[subtype], amount: 1 },
+      });
+    }
   }
 
   // 生物必须有数值 P/T

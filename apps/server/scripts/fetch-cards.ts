@@ -25,20 +25,39 @@ import path from 'node:path';
 
 const SEARCH_URL = 'https://api.scryfall.com/cards/search';
 const REQUEST_DELAY_MS = 120; // 尊重 Scryfall 限频（~10 rps）
+const REQUEST_TIMEOUT_MS = 30_000; // 单次请求超时：避免连接静默挂起导致整轮抓取卡死
+const MAX_RETRIES = 5; // 超时 / 429 的最大重试次数
 
 function resolveDbPath(): string {
   if (process.env.MTG_DB) return process.env.MTG_DB;
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data/mtg.db');
 }
 
-async function fetchWithRetry(url: string): Promise<Response> {
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'mtg-online-dev/0.1' },
-  });
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(url: string, attempt = 0): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { 'User-Agent': 'mtg-online-dev/0.1' },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (attempt >= MAX_RETRIES) {
+      throw new Error(`Scryfall 请求超时/中断（已重试 ${attempt} 次）：${(err as Error).message}`);
+    }
+    await sleep(1000 * (attempt + 1));
+    return fetchWithRetry(url, attempt + 1);
+  }
   if (res.status === 429) {
+    if (attempt >= MAX_RETRIES) {
+      throw new Error(`Scryfall 限频，已重试 ${attempt} 次仍失败：${url}`);
+    }
     const retryAfter = Number(res.headers.get('retry-after') ?? 2) * 1000;
-    await new Promise((r) => setTimeout(r, retryAfter));
-    return fetchWithRetry(url);
+    await sleep(retryAfter);
+    return fetchWithRetry(url, attempt + 1);
   }
   if (!res.ok) {
     throw new Error(`Scryfall 请求失败 ${res.status}: ${url}`);
@@ -50,16 +69,20 @@ async function fetchWithRetry(url: string): Promise<Response> {
 async function fetchStandardCards(onCard: (c: unknown) => void): Promise<number> {
   let url = `${SEARCH_URL}?q=${encodeURIComponent('f:s')}&unique=cards&format=json`;
   let fetched = 0;
+  let page = 0;
   while (url) {
     const json = (await (await fetchWithRetry(url)).json()) as {
       data: unknown[];
       has_more: boolean;
       next_page?: string;
+      total_cards?: number;
     };
     for (const c of json.data) onCard(c);
     fetched += json.data.length;
+    page += 1;
+    console.log(`  第 ${page} 页：累计 ${fetched}/${json.total_cards ?? '?'} 张`);
     url = json.has_more && json.next_page ? json.next_page : '';
-    await new Promise((r) => setTimeout(r, REQUEST_DELAY_MS));
+    if (url) await sleep(REQUEST_DELAY_MS);
   }
   return fetched;
 }

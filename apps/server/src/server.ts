@@ -19,7 +19,8 @@ import { GameSession } from './session/session.js';
 
 /** 默认数据库路径固定为 apps/server/data/mtg.db（与抓取脚本一致，不随 cwd 变化）。 */
 export function defaultDbPath(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data/mtg.db');
+  // 本文件位于 src/server.ts 或 dist/server.js —— 上一级即 apps/server
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../data/mtg.db');
 }
 
 export interface GameServerOptions {
