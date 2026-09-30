@@ -83,6 +83,9 @@ function findByName(engine: GameEngine, id: string, name: string): Permanent {
   if (!p) throw new Error(`${id} 战场上找不到 ${name}`);
   return p;
 }
+function graveyard(engine: GameEngine, id: string): Card[] {
+  return engine.view.players[playerIdx(engine, id)].graveyard;
+}
 
 /** 让双方轮流让过直到堆叠清空。 */
 function letStackResolve(engine: GameEngine): void {
@@ -260,8 +263,8 @@ describe('M6 战斗伤害结算', () => {
     expect(engine.view.players[1].life).toBe(17); // 20 - 3
   });
 
-  it('被阻挡：攻防双方互相标记伤害，玩家生命不变', () => {
-    const engine = makeEngine([cre('A', 2, 2)], [cre('B', 2, 2)]);
+  it('被阻挡：攻防双方互相标记伤害（均存活），玩家生命不变', () => {
+    const engine = makeEngine([cre('A', 2, 3)], [cre('B', 2, 3)]);
     setupBothCreatures(engine, 'A', 'B');
     runCombat(engine, 'A', { blockerName: 'B' });
     expect(findByName(engine, 'p2', 'B').damageMarked).toBe(2);
@@ -269,24 +272,26 @@ describe('M6 战斗伤害结算', () => {
     expect(engine.view.players[1].life).toBe(20);
   });
 
-  it('践踏：补足致命伤害后溢出打给玩家', () => {
+  it('践踏：补足致命伤害后击杀阻挡者，溢出打给玩家', () => {
     const engine = makeEngine([cre('A', 4, 4, ['TRAMPLE'])], [cre('B', 2, 2)]);
     setupBothCreatures(engine, 'A', 'B');
     runCombat(engine, 'A', { blockerName: 'B' });
-    expect(findByName(engine, 'p2', 'B').damageMarked).toBe(2); // 致命 2
+    // 阻挡者受到致命伤害被消灭（M7 状态检查）
+    expect(battlefield(engine, 'p2').some((p) => p.card.name === 'B')).toBe(false);
+    expect(graveyard(engine, 'p2').some((c) => c.name === 'B')).toBe(true);
     expect(engine.view.players[1].life).toBe(18); // 溢出 2
   });
 
-  it('先攻：先攻生物与普通阻挡者只在各自步骤造成一次伤害', () => {
+  it('先攻：先攻生物先造成伤害并击杀阻挡者', () => {
     const engine = makeEngine([cre('FS', 2, 2, ['FIRST_STRIKE'])], [cre('B', 1, 1)]);
     setupBothCreatures(engine, 'FS', 'B');
     runCombat(engine, 'FS', { blockerName: 'B' });
-    expect(findByName(engine, 'p2', 'B').damageMarked).toBe(2); // 先攻步骤打 2
-    expect(findByName(engine, 'p1', 'FS').damageMarked).toBe(1); // 普通步骤被挡者打 1
+    expect(graveyard(engine, 'p2').some((c) => c.name === 'B')).toBe(true); // 1/1 被先攻击杀
+    expect(findByName(engine, 'p1', 'FS').damageMarked).toBe(1); // 正常伤害步骤被挡者打 1
   });
 
   it('连击：两个伤害步骤各造成一次伤害', () => {
-    const engine = makeEngine([cre('DS', 2, 2, ['DOUBLE_STRIKE'])], [cre('B', 3, 3)]);
+    const engine = makeEngine([cre('DS', 2, 4, ['DOUBLE_STRIKE'])], [cre('B', 3, 5)]);
     setupBothCreatures(engine, 'DS', 'B');
     runCombat(engine, 'DS', { blockerName: 'B' });
     expect(findByName(engine, 'p2', 'B').damageMarked).toBe(4); // 2 + 2

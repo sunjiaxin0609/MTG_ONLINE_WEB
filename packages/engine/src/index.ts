@@ -5,4 +5,5 @@ export * from './cardParser.js';
 export * from './mana.js';
 export * from './stack.js';
 export * from './combat.js';
+export * from './sba.js';
 export * from './deck.js';

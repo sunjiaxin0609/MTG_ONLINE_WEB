@@ -119,6 +119,8 @@ export interface Permanent {
    * 具敏捷（HASTE）的生物忽略此限制。
    */
   sick?: boolean;
+  /** M7：是否受到过死触来源的伤害（任何量的死触伤害即为致命）。 */
+  deathtouchDamage?: boolean;
 }
 
 /** 单个玩家在对局中的状态（M4：扩展出牌库/手牌/战场/墓地/法术力池）。 */
@@ -139,6 +141,8 @@ export interface PlayerState {
   graveyard: Card[];
   /** 法术力池（横置地后注入，结算/支付后扣除；结束阶段清空）。 */
   manaPool: ManaPool;
+  /** M7：是否尝试过从空牌库抽牌（触发"牌库抽空判负"）。 */
+  drewFromEmptyLibrary?: boolean;
 }
 
 /**
@@ -152,6 +156,10 @@ export interface GameView {
   activePlayerId: string;
   priorityPlayerId: string;
   players: PlayerState[];
+  /** M7：对局是否已结束。 */
+  isOver: boolean;
+  /** M7：胜者 id；平局（无胜者）为 null。 */
+  winnerId: string | null;
 }
 
 // 阶段与步骤类型由 turn.ts 提供

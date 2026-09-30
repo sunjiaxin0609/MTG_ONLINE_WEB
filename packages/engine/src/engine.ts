@@ -22,6 +22,7 @@ import {
   hasKeyword,
   lethalDamage,
 } from './combat.js';
+import { hasLethalDamage, hasLost } from './sba.js';
 
 export interface EnginePlayerConfig {
   id: string;
@@ -60,7 +61,7 @@ import { buildStarterDeck } from './deck.js';
 
 export class GameEngine {
   static readonly NAME = '@mtg/engine';
-  static readonly VERSION = '0.5.0';
+  static readonly VERSION = '0.6.0';
 
   readonly config: EngineConfig;
   private readonly turnMgr: TurnManager;
@@ -78,6 +79,9 @@ export class GameEngine {
   /** M6：本回合是否已宣告攻击者 / 阻挡者（防止重复宣告）。 */
   private _attackersDeclared = false;
   private _blockersDeclared = false;
+  /** M7：对局是否结束及胜者（平局为 null）。 */
+  private _isOver = false;
+  private _winnerId: string | null = null;
 
   constructor(config: EngineConfig) {
     if (config.players.length < 2) {
@@ -153,7 +157,19 @@ export class GameEngine {
       activePlayerId: this.turnMgr.activePlayerId,
       priorityPlayerId: this.turnMgr.priorityPlayerId,
       players: this._playerOrder.map((id) => this.clonePlayer(this._players.get(id)!)),
+      isOver: this._isOver,
+      winnerId: this._winnerId,
     };
+  }
+
+  /** M7：对局是否已结束。 */
+  get isOver(): boolean {
+    return this._isOver;
+  }
+
+  /** M7：胜者 id（平局为 null）。 */
+  get winnerId(): string | null {
+    return this._winnerId;
   }
 
   private clonePlayer(p: PlayerState): PlayerState {
@@ -169,6 +185,11 @@ export class GameEngine {
 
   private player(id: string): PlayerState | undefined {
     return this._players.get(id);
+  }
+
+  /** M7：对局已结束时禁止一切动作（返回错误，否则 null）。 */
+  private _guardOver(): ActionResult | null {
+    return this._isOver ? err('对局已结束') : null;
   }
 
   get currentPhase(): Phase {
@@ -228,6 +249,8 @@ export class GameEngine {
    * 若全员让过且堆叠为空 → 进入下一步骤。
    */
   pass(playerId: string): ActionResult {
+    const over = this._guardOver();
+    if (over) return over;
     const p = this.player(playerId);
     if (!p) return err(`未知玩家: ${playerId}`);
     if (playerId !== this.turnMgr.priorityPlayerId) {
@@ -245,6 +268,7 @@ export class GameEngine {
     const top = this._stack.popTop();
     if (top) {
       this._resolveStackItem(top);
+      this._runStateBasedActions(); // 咒语结算后立即检查状态（如致命伤害 / 生命归零）
       this.turnMgr.resetPriority(); // 优先权还给主动玩家
       return { ok: true, message: `全员让过，结算堆叠顶：${top.card.name}` };
     }
@@ -260,6 +284,8 @@ export class GameEngine {
 
   /** 下地：把一张地牌从手牌放到战场（每回合限 1 张，仅持有优先权者可在主阶段做）。 */
   playLand(playerId: string, handIndex: number): ActionResult {
+    const over = this._guardOver();
+    if (over) return over;
     const p = this.player(playerId);
     if (!p) return err(`未知玩家: ${playerId}`);
     if (playerId !== this.turnMgr.priorityPlayerId) {
@@ -289,6 +315,8 @@ export class GameEngine {
    * M4 简化：只处理产费地。
    */
   activateMana(playerId: string, permanentId: string): ActionResult {
+    const over = this._guardOver();
+    if (over) return over;
     const p = this.player(playerId);
     if (!p) return err(`未知玩家: ${playerId}`);
     const perm = p.battlefield.find((x) => x.id === permanentId);
@@ -320,6 +348,8 @@ export class GameEngine {
    * 地需要走 playLand；待所有人让过后由 `_resolveStackItem` 结算栈顶。
    */
   castFromHand(playerId: string, handIndex: number): ActionResult {
+    const over = this._guardOver();
+    if (over) return over;
     const p = this.player(playerId);
     if (!p) return err(`未知玩家: ${playerId}`);
     if (playerId !== this.turnMgr.priorityPlayerId) {
@@ -380,6 +410,8 @@ export class GameEngine {
    * 合法者横置（具警戒者不横置）；传空数组表示本回合不攻击。
    */
   declareAttackers(playerId: string, permanentIds: string[]): ActionResult {
+    const over = this._guardOver();
+    if (over) return over;
     if (this.currentStep !== 'DECLARE_ATTACKERS') {
       return err('当前不是宣告攻击者步骤');
     }
@@ -415,6 +447,8 @@ export class GameEngine {
     playerId: string,
     assignments: { blockerId: string; attackerId: string }[],
   ): ActionResult {
+    const over = this._guardOver();
+    if (over) return over;
     if (this.currentStep !== 'DECLARE_BLOCKERS') {
       return err('当前不是宣告阻挡者步骤');
     }
@@ -492,10 +526,12 @@ export class GameEngine {
       // 被阻挡 → 按顺序分配致命伤害；溢出部分践踏给玩家，否则归最后一个阻挡者
       let remaining = power;
       let lastBlocker: Permanent | undefined;
+      const deathtouch = hasKeyword(attacker, 'DEATHTOUCH');
       for (const blocker of blockers) {
         if (remaining <= 0) break;
         const assigned = Math.min(remaining, lethalDamage(attacker, blocker));
         blocker.damageMarked = (blocker.damageMarked ?? 0) + assigned;
+        if (deathtouch && assigned > 0) blocker.deathtouchDamage = true;
         remaining -= assigned;
         lastBlocker = blocker;
       }
@@ -505,6 +541,7 @@ export class GameEngine {
         } else if (lastBlocker) {
           // 无践踏时伤害仍须全部分配（多出的部分堆在最后一个阻挡者上）
           lastBlocker.damageMarked = (lastBlocker.damageMarked ?? 0) + remaining;
+          if (deathtouch) lastBlocker.deathtouchDamage = true;
         }
       }
     }
@@ -518,6 +555,7 @@ export class GameEngine {
       const power = blocker.card.power ?? 0;
       if (power <= 0) continue;
       attacker.damageMarked = (attacker.damageMarked ?? 0) + power;
+      if (hasKeyword(blocker, 'DEATHTOUCH')) attacker.deathtouchDamage = true;
     }
   }
 
@@ -566,6 +604,7 @@ export class GameEngine {
     for (let i = 0; i < n; i++) {
       const card = p.library.shift();
       if (card) p.hand.push(card);
+      else p.drewFromEmptyLibrary = true; // 空牌库抽牌 → 状态检查判负（M7）
     }
   }
 
@@ -576,6 +615,34 @@ export class GameEngine {
     if (idx >= 0) {
       const perm = opp.battlefield.splice(idx, 1)[0];
       opp.graveyard.push(perm.card);
+    }
+  }
+
+  /**
+   * M7 状态检查：每当状态可能变化后执行。
+   *  1) 受到致命伤害（普通致命或死触）的生物被消灭并进入其操控者墓地；
+   *  2) 生命 ≤ 0 或曾从空牌库抽牌的玩家判负；若无剩余玩家则为平局。
+   */
+  private _runStateBasedActions(): void {
+    if (this._isOver) return;
+
+    // 1) 致命伤害死亡
+    for (const id of this._playerOrder) {
+      const p = this._players.get(id)!;
+      for (let i = p.battlefield.length - 1; i >= 0; i--) {
+        const perm = p.battlefield[i];
+        if (perm.card.category === 'creature' && hasLethalDamage(perm)) {
+          p.battlefield.splice(i, 1);
+          p.graveyard.push(perm.card);
+        }
+      }
+    }
+
+    // 2) 判负与胜负归属
+    const losers = this._playerOrder.filter((id) => hasLost(this._players.get(id)!));
+    if (losers.length > 0) {
+      this._isOver = true;
+      this._winnerId = this._playerOrder.find((id) => !losers.includes(id)) ?? null;
     }
   }
 
@@ -614,11 +681,15 @@ export class GameEngine {
       this._resolveCombatDamage();
     }
     if (step === 'CLEANUP') {
-      // 清理步骤：回合末清除所有永久物上的伤害标记（死亡判定属 M7 状态检查）
+      // 清理步骤：回合末清除所有永久物上的伤害标记与死触标记
       for (const id of this._playerOrder) {
-        for (const perm of this._players.get(id)!.battlefield) perm.damageMarked = 0;
+        for (const perm of this._players.get(id)!.battlefield) {
+          perm.damageMarked = 0;
+          perm.deathtouchDamage = false;
+        }
       }
     }
+    this._runStateBasedActions(); // 步骤边界统一做一次状态检查（伤害 / 判负）
   }
 }
 
