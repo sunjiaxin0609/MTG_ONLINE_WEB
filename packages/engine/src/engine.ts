@@ -294,6 +294,13 @@ export class GameEngine {
     if (playerId !== this.turnMgr.priorityPlayerId) {
       return err(`${p.name} 当前不持有优先权`);
     }
+
+    // 无优先权窗口的步骤（重置 / 清理）：无人可行动，直接推进
+    if (!this.turnMgr.currentStepUsesPriority && this._stack.isEmpty) {
+      this.advance();
+      return { ok: true, message: `推进到 ${this.currentStep}` };
+    }
+
     this._passes += 1;
 
     if (this._passes < this._playerOrder.length) {

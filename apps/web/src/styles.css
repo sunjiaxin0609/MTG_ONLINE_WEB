@@ -1,0 +1,524 @@
+/* MTG Online 牌桌样式（M10） */
+
+:root {
+  --bg: #14161c;
+  --panel: #1d2027;
+  --panel-2: #242833;
+  --line: #333846;
+  --text: #e8eaf0;
+  --muted: #9aa1b1;
+  --accent: #4f8cff;
+  --good: #35c07a;
+  --warn: #e0a03a;
+  --bad: #e0555a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, 'Segoe UI', sans-serif;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+.app.loading {
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+/* ---------- 顶栏 ---------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.topbar .brand {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.topbar .spacer {
+  flex: 1;
+}
+
+.pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pill.on {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.pill.good {
+  color: #0c2a1b;
+  background: var(--good);
+  border-color: var(--good);
+}
+
+/* ---------- 阶段指示器 ---------- */
+
+.stepstrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.step {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px solid transparent;
+}
+
+.step.current {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.step.phase-start {
+  border-left: 2px solid var(--line);
+}
+
+/* ---------- 玩家区 ---------- */
+
+.player {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.player.active-turn {
+  border-color: var(--accent);
+}
+
+.player-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.life {
+  font-size: 20px;
+  font-weight: 700;
+  min-width: 42px;
+  text-align: center;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.life.low {
+  color: var(--bad);
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.manapool {
+  display: flex;
+  gap: 4px;
+}
+
+.mana {
+  min-width: 22px;
+  text-align: center;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.mana.zero {
+  opacity: 0.35;
+}
+
+/* ---------- 战场 ---------- */
+
+.battlefield {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 108px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--line);
+}
+
+.battlefield.empty::after {
+  content: '（空）';
+  color: var(--muted);
+  font-size: 12px;
+  align-self: center;
+  padding-left: 6px;
+}
+
+.perm {
+  position: relative;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+/* 卡牌按钮复位（覆盖全局 button 样式） */
+button.perm,
+button.handcard {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  line-height: normal;
+}
+
+button.perm:not(.clickable) {
+  cursor: default;
+}
+
+button.handcard {
+  cursor: pointer;
+  border-radius: 8px;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  align-self: flex-end;
+}
+
+button.handcard:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.perm.tapped {
+  transform: rotate(12deg);
+  opacity: 0.75;
+}
+
+.perm.clickable:hover {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.perm.selected {
+  box-shadow: 0 0 0 3px var(--good);
+}
+
+.perm.attacking {
+  box-shadow: 0 0 0 2px var(--bad);
+}
+
+.perm.blocking {
+  box-shadow: 0 0 0 2px var(--warn);
+}
+
+.perm .badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--bad);
+  color: #fff;
+}
+
+.perm .badge.block {
+  background: var(--warn);
+  color: #241a05;
+}
+
+.perm .damage {
+  position: absolute;
+  bottom: -6px;
+  left: -6px;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #000;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+}
+
+/* ---------- 卡面 ---------- */
+
+.cardface {
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.cardface img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cardface.text {
+  padding: 6px;
+  font-size: 11px;
+  gap: 4px;
+}
+
+.cardface.text .name {
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.cardface.text .cost {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.cardface.text .pt {
+  align-self: flex-end;
+  font-weight: 700;
+}
+
+.cardface.disabled {
+  opacity: 0.5;
+}
+
+/* ---------- 手牌 ---------- */
+
+.hand {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px;
+  min-height: 118px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--line);
+}
+
+/* ---------- 中栏 ---------- */
+
+.middle {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 8px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.panel h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.stacklist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 40px;
+}
+
+.stackitem {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+
+.stackitem .who {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.log {
+  max-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.logline {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.logline .by {
+  color: var(--accent);
+}
+
+.hint {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(79, 140, 255, 0.12);
+  border: 1px solid rgba(79, 140, 255, 0.4);
+  font-size: 12px;
+}
+
+.hint.wait {
+  background: rgba(154, 161, 177, 0.1);
+  border-color: var(--line);
+}
+
+/* ---------- 操作栏 ---------- */
+
+.actionbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ---------- 悬停大图 ---------- */
+
+.hoverpreview {
+  position: fixed;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 280px;
+  z-index: 20;
+  pointer-events: none;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+.hoverpreview img {
+  width: 100%;
+  display: block;
+}
+
+.hoverpreview .fallback {
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ---------- 结束覆盖层 ---------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+}
+
+.overlay .box {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 28px 40px;
+  text-align: center;
+}
+
+.overlay h2 {
+  margin: 0 0 6px;
+  font-size: 26px;
+}
+
+.errorbar {
+  color: #ffd7d8;
+  background: rgba(224, 85, 90, 0.18);
+  border: 1px solid rgba(224, 85, 90, 0.5);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.errorbar button {
+  padding: 2px 8px;
+  font-size: 11px;
+}

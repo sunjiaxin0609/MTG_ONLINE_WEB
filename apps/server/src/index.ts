@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { DatabaseSync } from 'node:sqlite';
-import { GameAction, GameEngine } from '@mtg/engine';
+import { GameAction, GameEngine, GameView } from '@mtg/engine';
 import { openDatabase } from './data/db.js';
 import { getCounts } from './data/query.js';
 import { GameSession } from './session/session.js';
@@ -59,6 +59,37 @@ app.get('/api/health', (_req, res) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
+/**
+ * 脱敏：牌库内容不下发（只给数量）；手牌只下发自己的，对手手牌只给数量。
+ * 战场与墓地为公开信息，原样下发。
+ */
+function redactView(view: GameView, humanId: string) {
+  return {
+    ...view,
+    players: view.players.map((p) => ({
+      ...p,
+      libraryCount: p.library.length,
+      library: [],
+      handCount: p.hand.length,
+      hand: p.id === humanId ? p.hand : [],
+    })),
+  };
+}
+
+/** 组装一次可广播负载：脱敏视图 + 增量事件 + 战斗态势 + 堆叠。 */
+function makePayload(session: GameSession, extra: Record<string, unknown> = {}) {
+  const snapshot = session.takeSnapshot();
+  return {
+    ...extra,
+    view: redactView(snapshot.view, session.humanId),
+    events: snapshot.events,
+    attackersDeclared: session.engine.attackersDeclared,
+    blockersDeclared: session.engine.blockersDeclared,
+    combat: session.engine.combat,
+    stack: session.engine.stack,
+  };
+}
+
 wss.on('connection', (socket: WebSocket) => {
   const send = (payload: unknown) => {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
@@ -74,8 +105,7 @@ wss.on('connection', (socket: WebSocket) => {
     return;
   }
 
-  const initial = session.takeSnapshot();
-  send({ type: 'game_start', you: session.humanId, view: initial.view, events: initial.events });
+  send({ type: 'game_start', you: session.humanId, ...makePayload(session) });
 
   socket.on('message', (raw) => {
     let msg: { type?: string; action?: unknown };
@@ -94,8 +124,7 @@ wss.on('connection', (socket: WebSocket) => {
       send({ type: 'error', message: result.error });
       return;
     }
-    const snapshot = session.takeSnapshot();
-    send({ type: 'game_event', view: snapshot.view, events: snapshot.events });
+    send({ type: 'game_event', ...makePayload(session) });
   });
 
   socket.on('close', () => {
