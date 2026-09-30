@@ -4,4 +4,5 @@ export * from './engine.js';
 export * from './cardParser.js';
 export * from './mana.js';
 export * from './stack.js';
+export * from './combat.js';
 export * from './deck.js';

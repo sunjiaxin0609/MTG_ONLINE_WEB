@@ -112,6 +112,13 @@ export interface Permanent {
   tapped: boolean;
   /** 操控者玩家 id。 */
   controllerId: string;
+  /** M6：本回合累计受到的伤害（清理步骤清空；致命判定由 M7 状态检查处理）。 */
+  damageMarked?: number;
+  /**
+   * M6：召唤病 —— 生物进场当回合为 true，直到其操控者的下一个重置步骤清除。
+   * 具敏捷（HASTE）的生物忽略此限制。
+   */
+  sick?: boolean;
 }
 
 /** 单个玩家在对局中的状态（M4：扩展出牌库/手牌/战场/墓地/法术力池）。 */

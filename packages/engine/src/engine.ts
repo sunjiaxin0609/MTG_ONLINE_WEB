@@ -14,6 +14,14 @@ import { TurnManager } from './turn.js';
 import { Card, GameView, ManaSymbol, Permanent, Phase, PlayerState, TurnStep } from './types.js';
 import { canPay, emptyPool, payCost, parseManaCost, addToPool } from './mana.js';
 import { Stack, StackItem } from './stack.js';
+import {
+  canAttack,
+  canBlock,
+  DamagePass,
+  dealsDamageInPass,
+  hasKeyword,
+  lethalDamage,
+} from './combat.js';
 
 export interface EnginePlayerConfig {
   id: string;
@@ -52,7 +60,7 @@ import { buildStarterDeck } from './deck.js';
 
 export class GameEngine {
   static readonly NAME = '@mtg/engine';
-  static readonly VERSION = '0.4.0';
+  static readonly VERSION = '0.5.0';
 
   readonly config: EngineConfig;
   private readonly turnMgr: TurnManager;
@@ -63,6 +71,13 @@ export class GameEngine {
   private readonly _stack = new Stack();
   /** 连续让过计数：≥玩家数（2）时视为"全员让过"，触发结算或推进。 */
   private _passes = 0;
+  /** M6：本回合已宣告的攻击者永久物 id（按宣告顺序）。 */
+  private _attackers: string[] = [];
+  /** M6：阻挡关系 blockerId → attackerId。 */
+  private _blocks = new Map<string, string>();
+  /** M6：本回合是否已宣告攻击者 / 阻挡者（防止重复宣告）。 */
+  private _attackersDeclared = false;
+  private _blockersDeclared = false;
 
   constructor(config: EngineConfig) {
     if (config.players.length < 2) {
@@ -179,6 +194,19 @@ export class GameEngine {
 
   get stackCount(): number {
     return this._stack.length;
+  }
+
+  /** 本回合的防御玩家（两人对局即主动玩家的对手）。 */
+  get defenderId(): string {
+    return this._playerOrder.find((id) => id !== this.activePlayerId)!;
+  }
+
+  /** 当前战斗态势（观察 / 测试用）。 */
+  get combat(): { attackers: string[]; blocks: { blockerId: string; attackerId: string }[] } {
+    return {
+      attackers: [...this._attackers],
+      blocks: [...this._blocks].map(([blockerId, attackerId]) => ({ blockerId, attackerId })),
+    };
   }
 
   /** 推进一个步骤，并在步骤边界挂接规则（重置/抽牌/清空法术力池、重置优先权与让过计数）。 */
@@ -320,7 +348,15 @@ export class GameEngine {
 
   private makePermanent(card: Card, controllerId: string): Permanent {
     this._permSeq += 1;
-    return { id: `perm-${controllerId}-${this._permSeq}`, card, tapped: false, controllerId };
+    return {
+      id: `perm-${controllerId}-${this._permSeq}`,
+      card,
+      tapped: false,
+      controllerId,
+      damageMarked: 0,
+      // 生物有召唤病（除非具敏捷）；地在下一回合前不可攻击，无需标记
+      sick: card.category === 'creature',
+    };
   }
 
   /** 结算一个栈顶物件（当前仅咒语）。永久物咒语进战场；法术/瞬间结算后进墓地。 */
@@ -335,6 +371,154 @@ export class GameEngine {
     // 法术 / 瞬间：执行效果后进墓地
     this.resolveSpell(p, card);
     p.graveyard.push(card);
+  }
+
+  // ---------- M6 战斗 ----------
+
+  /**
+   * 宣告攻击者（主动玩家在宣告攻击者步骤进行）。
+   * 合法者横置（具警戒者不横置）；传空数组表示本回合不攻击。
+   */
+  declareAttackers(playerId: string, permanentIds: string[]): ActionResult {
+    if (this.currentStep !== 'DECLARE_ATTACKERS') {
+      return err('当前不是宣告攻击者步骤');
+    }
+    const p = this.player(playerId);
+    if (!p) return err(`未知玩家: ${playerId}`);
+    if (playerId !== this.activePlayerId) return err('只有主动玩家可以宣告攻击者');
+    if (this._attackersDeclared) return err('本回合已宣告过攻击者');
+    if (new Set(permanentIds).size !== permanentIds.length) return err('攻击者重复');
+
+    for (const id of permanentIds) {
+      const perm = p.battlefield.find((x) => x.id === id);
+      if (!perm) return err(`战场上没有这个永久物: ${id}`);
+      if (!canAttack(perm)) {
+        return err(`${perm.card.name} 不能攻击（已横置 / 具守军 / 召唤病）`);
+      }
+    }
+
+    this._attackers = [...permanentIds];
+    this._attackersDeclared = true;
+    for (const id of this._attackers) {
+      const perm = p.battlefield.find((x) => x.id === id)!;
+      if (!hasKeyword(perm, 'VIGILANCE')) perm.tapped = true;
+    }
+    this._passes = 0;
+    return { ok: true, message: `${p.name} 宣告 ${permanentIds.length} 个攻击者` };
+  }
+
+  /**
+   * 宣告阻挡者（防御玩家在宣告阻挡者步骤进行）。
+   * `assignments` 中的顺序即同一攻击者所受多阻挡者的伤害分配顺序；传空数组表示不阻挡。
+   */
+  declareBlockers(
+    playerId: string,
+    assignments: { blockerId: string; attackerId: string }[],
+  ): ActionResult {
+    if (this.currentStep !== 'DECLARE_BLOCKERS') {
+      return err('当前不是宣告阻挡者步骤');
+    }
+    const p = this.player(playerId);
+    if (!p) return err(`未知玩家: ${playerId}`);
+    if (playerId === this.activePlayerId) return err('主动玩家不能宣告阻挡者');
+    if (playerId !== this.defenderId) return err('只有防御玩家可以宣告阻挡者');
+    if (this._blockersDeclared) return err('本回合已宣告过阻挡者');
+
+    const seen = new Set<string>();
+    for (const { blockerId, attackerId } of assignments) {
+      if (seen.has(blockerId)) return err('同一个生物不能阻挡多个攻击者');
+      seen.add(blockerId);
+      if (!this._attackers.includes(attackerId)) {
+        return err(`该生物未被宣告攻击: ${attackerId}`);
+      }
+      const blocker = p.battlefield.find((x) => x.id === blockerId);
+      if (!blocker) return err(`战场上没有这个永久物: ${blockerId}`);
+      const attacker = this._findPermanent(attackerId);
+      if (!attacker) return err(`找不到攻击者: ${attackerId}`);
+      if (!canBlock(blocker, attacker)) {
+        return err(`${blocker.card.name} 不能阻挡 ${attacker.card.name}（飞行 / 威吓等限制）`);
+      }
+    }
+
+    this._blocks = new Map(assignments.map((a) => [a.blockerId, a.attackerId]));
+    this._blockersDeclared = true;
+    this._passes = 0;
+    return { ok: true, message: `${p.name} 宣告 ${assignments.length} 个阻挡者` };
+  }
+
+  /** 跨所有玩家战场查找永久物。 */
+  private _findPermanent(id: string): Permanent | undefined {
+    for (const pid of this._playerOrder) {
+      const found = this._players.get(pid)!.battlefield.find((x) => x.id === id);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  /** 某攻击者当前的阻挡者（按宣告顺序）。 */
+  private _blockersOf(attackerId: string): Permanent[] {
+    const result: Permanent[] = [];
+    for (const [blockerId, atkId] of this._blocks) {
+      if (atkId !== attackerId) continue;
+      const perm = this._findPermanent(blockerId);
+      if (perm) result.push(perm);
+    }
+    return result;
+  }
+
+  /** 战斗伤害结算：先攻子步骤 + 普通子步骤。 */
+  private _resolveCombatDamage(): void {
+    this._combatDamagePass('FIRST_STRIKE');
+    this._combatDamagePass('REGULAR');
+  }
+
+  /** 单个伤害子步骤：符合条件的攻击者与阻挡者互相造成伤害。 */
+  private _combatDamagePass(pass: DamagePass): void {
+    const defender = this.player(this.defenderId);
+
+    // 攻击者造成伤害
+    for (const attackerId of this._attackers) {
+      const attacker = this._findPermanent(attackerId);
+      if (!attacker || !dealsDamageInPass(attacker, pass)) continue;
+      const power = attacker.card.power ?? 0;
+      if (power <= 0) continue;
+
+      const blockers = this._blockersOf(attackerId);
+      if (blockers.length === 0) {
+        // 未被阻挡 → 伤害直接打防御玩家
+        if (defender) defender.life -= power;
+        continue;
+      }
+      // 被阻挡 → 按顺序分配致命伤害；溢出部分践踏给玩家，否则归最后一个阻挡者
+      let remaining = power;
+      let lastBlocker: Permanent | undefined;
+      for (const blocker of blockers) {
+        if (remaining <= 0) break;
+        const assigned = Math.min(remaining, lethalDamage(attacker, blocker));
+        blocker.damageMarked = (blocker.damageMarked ?? 0) + assigned;
+        remaining -= assigned;
+        lastBlocker = blocker;
+      }
+      if (remaining > 0) {
+        if (hasKeyword(attacker, 'TRAMPLE') && defender) {
+          defender.life -= remaining;
+        } else if (lastBlocker) {
+          // 无践踏时伤害仍须全部分配（多出的部分堆在最后一个阻挡者上）
+          lastBlocker.damageMarked = (lastBlocker.damageMarked ?? 0) + remaining;
+        }
+      }
+    }
+
+    // 阻挡者造成伤害（打其阻挡的攻击者）
+    for (const [blockerId, attackerId] of this._blocks) {
+      const blocker = this._findPermanent(blockerId);
+      const attacker = this._findPermanent(attackerId);
+      if (!blocker || !attacker) continue;
+      if (!dealsDamageInPass(blocker, pass)) continue;
+      const power = blocker.card.power ?? 0;
+      if (power <= 0) continue;
+      attacker.damageMarked = (attacker.damageMarked ?? 0) + power;
+    }
   }
 
   /** 法术/瞬间的最简效果执行（M4：仅处理可执行指令，DAMAGE/DRAW/LIFEGAIN/DESTROY/POWER_TOUGHNESS）。 */
@@ -395,25 +579,45 @@ export class GameEngine {
     }
   }
 
-  /** 在步骤边界执行规则：新回合重置、抽牌、清空法术力池，并重置优先权与让过计数。 */
+  /** 在步骤边界执行规则：重置/抽牌/清空法术力池、战斗态势与伤害，并重置优先权计数。 */
   private _onStepEntered(): void {
     this._passes = 0; // 进入新步骤即开启全新优先权窗口
     const step = this.turnMgr.currentStep;
     const active = this.activePlayerId;
     if (step === 'UNTAP') {
-      // 新回合（含第 1 回合初始）：重置下地计数、清空法术力池、重置主动玩家的永久物
+      // 新回合（含第 1 回合初始）：重置下地计数、清空法术力池、重置主动玩家的永久物与召唤病
       for (const id of this._playerOrder) {
         const p = this._players.get(id)!;
         p.landsPlayedThisTurn = 0;
         p.manaPool = emptyPool();
       }
       const ap = this.player(active)!;
-      for (const perm of ap.battlefield) perm.tapped = false;
+      for (const perm of ap.battlefield) {
+        perm.tapped = false;
+        perm.sick = false; // 该玩家回合开始 → 其生物不再有召唤病
+      }
     }
     if (step === 'DRAW') {
       // 抽牌步骤：主动玩家抓 1 张
       const ap = this.player(active);
       if (ap) this.drawCards(ap, 1);
+    }
+    if (step === 'BEGIN_COMBAT') {
+      // 进入战斗阶段：清空上回合战斗态势
+      this._attackers = [];
+      this._blocks = new Map();
+      this._attackersDeclared = false;
+      this._blockersDeclared = false;
+    }
+    if (step === 'COMBAT_DAMAGE') {
+      // 战斗伤害步骤：结算先攻 + 普通两轮伤害
+      this._resolveCombatDamage();
+    }
+    if (step === 'CLEANUP') {
+      // 清理步骤：回合末清除所有永久物上的伤害标记（死亡判定属 M7 状态检查）
+      for (const id of this._playerOrder) {
+        for (const perm of this._players.get(id)!.battlefield) perm.damageMarked = 0;
+      }
     }
   }
 }
