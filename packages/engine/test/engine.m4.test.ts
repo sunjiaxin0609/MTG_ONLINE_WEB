@@ -215,6 +215,17 @@ describe('M4 activateMana 产费', () => {
   });
 });
 
+/** 让双方轮流让过，直到堆叠清空（用于断言施放结算后的状态）。 */
+function letStackResolve(engine: GameEngine): void {
+  let guard = 0;
+  while (engine.stackCount > 0) {
+    const r = engine.pass(engine.priorityPlayerId);
+    if (!r.ok) throw new Error('堆叠结算失败：' + (<{ error: string }>r).error);
+    guard += 1;
+    if (guard > 40) throw new Error('堆叠未能结算');
+  }
+}
+
 // ---------- cast ----------
 
 describe('M4 castFromHand 施法', () => {
@@ -229,26 +240,35 @@ describe('M4 castFromHand 施法', () => {
     expect(errMsg(r)).toContain('法术力不足');
     expect(engine.view.players[0].battlefield.length).toBe(0); // 未进场
     expect(engine.view.players[0].hand.length).toBe(handBefore); // 未离手
+    expect(engine.stackCount).toBe(0);
   });
 
-  it('备足费用后施放生物：手牌→战场并扣除费用', () => {
+  it('备足费用后施放生物：咒语先入堆叠，全员让过后进场并扣费', () => {
     const engine = makeEngine({ p1Top: [soldier(1), plains(1), plains(2), plains(3), plains(4), plains(5), plains(6)] });
     readyMana(engine);
     const soldierIdx = engine.view.players[0].hand.findIndex((c) => c.category === 'creature');
     const r = engine.castFromHand('p1', soldierIdx);
     expect(isOk(r)).toBe(true);
+    expect(engine.stackCount).toBe(1); // 仍在堆叠，未进场
+    expect(engine.view.players[0].battlefield.filter((x) => x.card.category === 'creature').length).toBe(0);
+
+    letStackResolve(engine); // 双方让过 → 结算栈顶
     const p1 = engine.view.players[0];
     expect(p1.battlefield.filter((x) => x.card.category === 'creature').length).toBe(1);
     expect(p1.manaPool.W).toBe(0); // 1 白用于 {W}
+    expect(engine.stackCount).toBe(0);
   });
 
-  it('用富余法术力施放通用费用法术：结算 LIFEGAIN 后进墓地', () => {
+  it('备足费用后施放法术：结算 LIFEGAIN 后进墓地', () => {
     const engine = makeEngine({ p1Top: [heal(1), plains(1), plains(2), plains(3), plains(4), plains(5), plains(6)] });
     readyMana(engine);
     const lifeBefore = engine.view.players[0].life;
     const healIdx = engine.view.players[0].hand.findIndex((c) => c.category === 'sorcery');
     const r = engine.castFromHand('p1', healIdx);
     expect(isOk(r)).toBe(true);
+    expect(engine.view.players[0].life).toBe(lifeBefore); // 未结算，生命没变
+
+    letStackResolve(engine);
     const p1 = engine.view.players[0];
     expect(p1.life).toBe(lifeBefore + 3);
     expect(p1.battlefield.length).toBe(1); // 只有 1 块地，法术没进场

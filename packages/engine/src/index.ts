@@ -3,4 +3,5 @@ export * from './turn.js';
 export * from './engine.js';
 export * from './cardParser.js';
 export * from './mana.js';
+export * from './stack.js';
 export * from './deck.js';

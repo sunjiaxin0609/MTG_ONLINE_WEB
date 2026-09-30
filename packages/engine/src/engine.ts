@@ -4,14 +4,16 @@
  * M2：接入 TurnManager，暴露阶段+步骤+优先权视图。
  * M4：接入法术力系统与基本操作 —— 玩家扩展出牌库/手牌/战场/墓地/法术力池，
  *      支持 `playLand` / `activateMana` / `castFromHand` / `pass` 四类动作，
- *      并挂接步骤钩子（重置、抽牌、清空法术力池）。非法操作返回明确错误且不改状态。
- *
- * 说明：M4 的 cast 采用"立即结算"（不经堆叠），堆叠与完整优先权留到 M5 重构。
+ *      并挂接步骤钩子（重置、抽牌、清空法术力池）。
+ * M5：接入 StackSystem 与完整优先权 —— 咒语先入堆叠再结算（LIFO），
+ *      全员让过且堆叠非空时结算栈顶，全员让过且堆叠为空时推进步骤。
+ *      非法操作返回明确错误且不改状态。
  */
 
 import { TurnManager } from './turn.js';
 import { Card, GameView, ManaSymbol, Permanent, Phase, PlayerState, TurnStep } from './types.js';
 import { canPay, emptyPool, payCost, parseManaCost, addToPool } from './mana.js';
+import { Stack, StackItem } from './stack.js';
 
 export interface EnginePlayerConfig {
   id: string;
@@ -50,13 +52,17 @@ import { buildStarterDeck } from './deck.js';
 
 export class GameEngine {
   static readonly NAME = '@mtg/engine';
-  static readonly VERSION = '0.3.0';
+  static readonly VERSION = '0.4.0';
 
   readonly config: EngineConfig;
   private readonly turnMgr: TurnManager;
   private readonly _players: Map<string, PlayerState>;
   private readonly _playerOrder: string[];
   private _permSeq = 0;
+  /** 堆叠（咒语/异能）。 */
+  private readonly _stack = new Stack();
+  /** 连续让过计数：≥玩家数（2）时视为"全员让过"，触发结算或推进。 */
+  private _passes = 0;
 
   constructor(config: EngineConfig) {
     if (config.players.length < 2) {
@@ -166,7 +172,16 @@ export class GameEngine {
     return this.turnMgr.priorityPlayerId;
   }
 
-  /** 推进一个步骤，并在步骤边界挂接 M4 规则（重置/抽牌/清空法术力池）。 */
+  /** 当前堆叠物件（自栈底到栈顶；仅用于观察/测试）。 */
+  get stack(): StackItem[] {
+    return this._stack.peekAll();
+  }
+
+  get stackCount(): number {
+    return this._stack.length;
+  }
+
+  /** 推进一个步骤，并在步骤边界挂接规则（重置/抽牌/清空法术力池、重置优先权与让过计数）。 */
   advance(): void {
     this.turnMgr.advance();
     this._onStepEntered();
@@ -178,28 +193,49 @@ export class GameEngine {
     this._onStepEntered();
   }
 
-  /** 让当前优先权持有者让过（M4 仍为雏形；完整轮转在 M5）。 */
+  /**
+   * 让过优先权（M5 完整实现）。
+   * 若未全员让过 → 优先权传给下一玩家；
+   * 若全员让过且堆叠非空 → 结算栈顶，把优先权还给当前主动玩家；
+   * 若全员让过且堆叠为空 → 进入下一步骤。
+   */
   pass(playerId: string): ActionResult {
     const p = this.player(playerId);
     if (!p) return err(`未知玩家: ${playerId}`);
     if (playerId !== this.turnMgr.priorityPlayerId) {
       return err(`${p.name} 当前不持有优先权`);
     }
-    this.turnMgr.passPriority();
-    return { ok: true, message: `${p.name} 让过优先权` };
+    this._passes += 1;
+
+    if (this._passes < this._playerOrder.length) {
+      this.turnMgr.passPriority();
+      return { ok: true, message: `${p.name} 让过优先权` };
+    }
+
+    // 全员让过
+    this._passes = 0;
+    const top = this._stack.popTop();
+    if (top) {
+      this._resolveStackItem(top);
+      this.turnMgr.resetPriority(); // 优先权还给主动玩家
+      return { ok: true, message: `全员让过，结算堆叠顶：${top.card.name}` };
+    }
+    // 堆叠空 → 进入下一步
+    this.advance();
+    return { ok: true, message: `全员让过，推进到 ${this.currentStep}` };
   }
 
   /** 兼容 M2 的无参形式：让当前优先权持有者让过优先权。 */
   passPriority(): void {
-    this.turnMgr.passPriority();
+    this.pass(this.priorityPlayerId);
   }
 
-  /** 下地：把一张地牌从手牌放到战场（每回合限 1 张，仅主动玩家在主要以阶段可做）。 */
+  /** 下地：把一张地牌从手牌放到战场（每回合限 1 张，仅持有优先权者可在主阶段做）。 */
   playLand(playerId: string, handIndex: number): ActionResult {
     const p = this.player(playerId);
     if (!p) return err(`未知玩家: ${playerId}`);
-    if (playerId !== this.turnMgr.activePlayerId) {
-      return err(`${p.name} 不是当前回合主动玩家，不能下地`);
+    if (playerId !== this.turnMgr.priorityPlayerId) {
+      return err(`${p.name} 当前不持有优先权，不能下地`);
     }
     if (this.currentStep !== 'FIRST_MAIN' && this.currentStep !== 'SECOND_MAIN') {
       return err('只能在主阶段的优先权窗口下地');
@@ -212,10 +248,11 @@ export class GameEngine {
     if (card.category !== 'land') {
       return err(`${card.name} 不是地，不能以"下地"动作进场`);
     }
-    // 从手牌移除 → 作为永久物进场
+    // 从手牌移除 → 作为永久物进场（地直接进场，不进堆叠）
     p.hand.splice(handIndex, 1);
     p.battlefield.push(this.makePermanent(card, playerId));
     p.landsPlayedThisTurn += 1;
+    this._passes = 0; // 主动作重置让过计数，优先权不变
     return { ok: true, message: `${p.name} 下了一张地 ${card.name}` };
   }
 
@@ -251,14 +288,14 @@ export class GameEngine {
   }
 
   /**
-   * 施放一张手牌：校验费用可支付后立即结算（M4 不经堆叠）。
-   * 地需要走 playLand；生物/灵气进战场；法术/瞬间执行简单 SPELL 效果后进墓地。
+   * 施放一张手牌：先支付费用并把咒语放入堆叠（M5 不再立即结算）。
+   * 地需要走 playLand；待所有人让过后由 `_resolveStackItem` 结算栈顶。
    */
   castFromHand(playerId: string, handIndex: number): ActionResult {
     const p = this.player(playerId);
     if (!p) return err(`未知玩家: ${playerId}`);
-    if (playerId !== this.turnMgr.activePlayerId) {
-      return err(`${p.name} 不是当前回合主动玩家，不能施放`);
+    if (playerId !== this.turnMgr.priorityPlayerId) {
+      return err(`${p.name} 当前不持有优先权，不能施放`);
     }
     if (!this.turnMgr.currentStepUsesPriority) {
       return err('当前步骤没有优先权窗口，无法施放');
@@ -273,25 +310,31 @@ export class GameEngine {
     if (!canPay(p.manaPool, cost)) {
       return err(`法术力不足以施放 ${card.name}（需要 ${formatCost(card.manaCost!)}）`);
     }
-    // 支付费用
+    // 支付费用，咒语离手并进入堆叠
     payCost(p.manaPool, cost);
-    // 从手牌移除
     p.hand.splice(handIndex, 1);
-
-    if (card.category === 'creature' || card.category === 'aura') {
-      p.battlefield.push(this.makePermanent(card, playerId));
-      return { ok: true, message: `${p.name} 施放 ${card.name} 进场` };
-    }
-
-    // 法术 / 瞬间：执行简单效果后进墓地
-    this.resolveSpell(p, card);
-    p.graveyard.push(card);
-    return { ok: true, message: `${p.name} 施放 ${card.name}（立即结算）` };
+    this._stack.push(playerId, card);
+    this._passes = 0; // 主动作重置让过计数
+    return { ok: true, message: `${p.name} 施放 ${card.name}，咒语进入堆叠` };
   }
 
   private makePermanent(card: Card, controllerId: string): Permanent {
     this._permSeq += 1;
     return { id: `perm-${controllerId}-${this._permSeq}`, card, tapped: false, controllerId };
+  }
+
+  /** 结算一个栈顶物件（当前仅咒语）。永久物咒语进战场；法术/瞬间结算后进墓地。 */
+  private _resolveStackItem(item: StackItem): void {
+    const p = this.player(item.controllerId);
+    if (!p) return;
+    const card = item.card;
+    if (card.category === 'creature' || card.category === 'aura') {
+      p.battlefield.push(this.makePermanent(card, item.controllerId));
+      return;
+    }
+    // 法术 / 瞬间：执行效果后进墓地
+    this.resolveSpell(p, card);
+    p.graveyard.push(card);
   }
 
   /** 法术/瞬间的最简效果执行（M4：仅处理可执行指令，DAMAGE/DRAW/LIFEGAIN/DESTROY/POWER_TOUGHNESS）。 */
@@ -352,8 +395,9 @@ export class GameEngine {
     }
   }
 
-  /** 在步骤边界执行 M4 规则（近似）：新回合重置、维持阶段抓牌、结束清空法术力池。 */
+  /** 在步骤边界执行规则：新回合重置、抽牌、清空法术力池，并重置优先权与让过计数。 */
   private _onStepEntered(): void {
+    this._passes = 0; // 进入新步骤即开启全新优先权窗口
     const step = this.turnMgr.currentStep;
     const active = this.activePlayerId;
     if (step === 'UNTAP') {
