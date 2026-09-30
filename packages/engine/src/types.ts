@@ -33,6 +33,23 @@ export type CardCategory = 'land' | 'creature' | 'sorcery' | 'instant' | 'aura';
 /** 基础法术力颜色（万智牌五色 + 无色 C）。 */
 export type ManaSymbol = 'W' | 'U' | 'B' | 'R' | 'G' | 'C';
 
+/** 五色（卡牌费用只可能用它；C 归入无色/通用费用）。 */
+export type ManaColor = 'W' | 'U' | 'B' | 'R' | 'G';
+
+/** 玩家当前的法术力池：每种颜色+无色的可用量。 */
+export type ManaPool = Record<ManaSymbol, number>;
+
+/**
+ * 卡牌费用结构化拆解。
+ * `generic` 为通用法术力部分（任何颜色+无色都能付）；
+ * `colors` 为指定颜色要求；`total` 为总法术力值（CMC）。
+ */
+export interface CostBreakdown {
+  generic: number;
+  colors: Record<ManaColor, number>;
+  total: number;
+}
+
 /** 效果指令。后续里程碑（M4+ EffectSystem）逐步充实这些指令的语义。 */
 export type AbilityEffect =
   | { kind: 'ADD_MANA'; color: ManaSymbol; amount: number }
@@ -82,12 +99,39 @@ export type KeywordId = (typeof KEYWORDS)[number];
 /** 游戏区域。 */
 export type Zone = 'library' | 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'stack';
 
-/** 单个玩家在对局中的状态。 */
+/**
+ * 战场上的一个永久物（地/生物/灵气等）。
+ * `id` 为战场实例唯一 id（同一张牌的多个复制各有一份）；`cardRef` 表示其所属卡牌。
+ */
+export interface Permanent {
+  /** 战场实例唯一 id（引擎内自增）。 */
+  id: string;
+  /** 所属卡牌（含费用、类别、能力指令）。 */
+  card: Card;
+  /** 是否横置（地产费后为 true；重置步骤恢复）。 */
+  tapped: boolean;
+  /** 操控者玩家 id。 */
+  controllerId: string;
+}
+
+/** 单个玩家在对局中的状态（M4：扩展出牌库/手牌/战场/墓地/法术力池）。 */
 export interface PlayerState {
   id: string;
   name: string;
   life: number;
   isComputed: boolean;
+  /** 当前回合的本回合已下地数量（标准赛每回合 1 张，此处按已用计数）。 */
+  landsPlayedThisTurn: number;
+  /** 牌库（按从上到下顺序）。 */
+  library: Card[];
+  /** 手牌（顺序无关）。 */
+  hand: Card[];
+  /** 该玩家操控的战场永久物（M4 简化：战场按操控者分区，永久物带 controllerId）。 */
+  battlefield: Permanent[];
+  /** 墓地。 */
+  graveyard: Card[];
+  /** 法术力池（横置地后注入，结算/支付后扣除；结束阶段清空）。 */
+  manaPool: ManaPool;
 }
 
 /**

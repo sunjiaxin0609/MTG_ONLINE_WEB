@@ -3,6 +3,7 @@ import { parseScryfallCard, ScryfallCardRaw } from '@mtg/engine';
 import { openDatabase, closeDatabase } from '../src/data/db.js';
 import { insertCard, clearCards } from '../src/data/store.js';
 import { getCardById, getCardPool, getCounts } from '../src/data/query.js';
+import { buildStandardDeck } from '../src/data/deck.js';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Card } from '@mtg/engine';
 
@@ -63,5 +64,20 @@ describe('SQLite 卡池往返', () => {
   it('clearCards 清空后可重建（幂等抓取）', () => {
     clearCards(db);
     expect(getCounts(db).total).toBe(0);
+  });
+});
+
+describe('M4 起始牌组 fixture', () => {
+  it('从卡池构建正好 60 张的牌组，且含地/生物/法术三类', () => {
+    clearCards(db);
+    insertCard(db, makeCard({ id: 'l1', type_line: 'Basic Land — Plains', oracle_text: '{T}: Add {W}.' }), { legalStandard: true });
+    insertCard(db, makeCard({ id: 'c1', type_line: 'Creature — Bear', oracle_text: 'Flying', power: '2', toughness: '2' }), { legalStandard: true });
+    insertCard(db, makeCard({ id: 's1', type_line: 'Sorcery', oracle_text: 'Deal 2 damage' }), { legalStandard: true });
+
+    const deck = buildStandardDeck(db);
+    expect(deck.length).toBe(60);
+    expect(deck.some((c) => c.category === 'land')).toBe(true);
+    expect(deck.some((c) => c.category === 'creature')).toBe(true);
+    expect(deck.some((c) => c.category === 'sorcery')).toBe(true);
   });
 });
