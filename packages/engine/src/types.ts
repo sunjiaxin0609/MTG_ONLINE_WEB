@@ -10,7 +10,10 @@ export interface Card {
   /** 法术力费用，如 "2W"、"1G"、"RR"。null 代表没有费用（如地）。 */
   manaCost: string | null;
   typeLine: string;
+  /** 卡牌颜色（W/U/B/R/G），无色的地/器物为空数组。 */
   colors: string[];
+  /** 首版支持的卡牌大类别。 */
+  category: CardCategory;
   power?: number;
   toughness?: number;
   abilities: CardAbility[];
@@ -18,12 +21,47 @@ export interface Card {
   imageUris?: { normal: string; large: string };
 }
 
-/** 能力指令：把卡牌文字拆解为可执行的结构化技能。 */
+/** 首版支持的大类别：地 / 生物 / 法术 / 瞬间 / 基础灵气。 */
+export type CardCategory = 'land' | 'creature' | 'sorcery' | 'instant' | 'aura';
+
+/**
+ * 能力指令：把卡牌文字拆解为可执行的结构化技能（M3 深化）。
+ * 每条 Oracle 文本行都映射成一种结构化能力；解析不出的行记为 UNKNOWN，
+ * 拥有 UNKNOWN 能力的卡在卡池构建阶段被过滤（supported=false）。
+ */
+
+/** 基础法术力颜色（万智牌五色 + 无色 C）。 */
+export type ManaSymbol = 'W' | 'U' | 'B' | 'R' | 'G' | 'C';
+
+/** 效果指令。后续里程碑（M4+ EffectSystem）逐步充实这些指令的语义。 */
+export type AbilityEffect =
+  | { kind: 'ADD_MANA'; color: ManaSymbol; amount: number }
+  | { kind: 'POWER_TOUGHNESS'; powerMod: number; toughnessMod: number; duration: 'ENDOF_TURN' | 'PERMANENT' }
+  | { kind: 'DAMAGE'; amount: number }
+  | { kind: 'LIFEGAIN'; amount: number }
+  | { kind: 'DRAW'; amount: number }
+  | { kind: 'DESTROY'; what: string }
+  | { kind: 'AURA'; target: string }
+  | { kind: 'UNKNOWN'; text: string };
+
+/** 启动式异能费用。 */
+export type ActivatedCost =
+  | { type: 'TAP' }
+  | { type: 'MANA'; cost: string };
+
+/** 触发式异能的触发时机。 */
+export type TriggerInfo =
+  | { kind: 'ETB' }
+  | { kind: 'UPKEEP' }
+  | { kind: 'END_STEP' }
+  | { kind: 'UNKNOWN'; text: string };
+
 export type CardAbility =
   | { type: 'KEYWORD'; keyword: KeywordId }
-  | { type: 'ACTIVATED'; activation: unknown }
-  | { type: 'TRIGGERED'; trigger: unknown; effect: unknown }
-  | { type: 'STATIC'; effect: unknown };
+  | { type: 'ACTIVATED'; cost: ActivatedCost | null; effect: AbilityEffect }
+  | { type: 'TRIGGERED'; trigger: TriggerInfo; effect: AbilityEffect }
+  | { type: 'SPELL'; effect: AbilityEffect }
+  | { type: 'STATIC'; effect: AbilityEffect };
 
 /** 首版支持的关键字（M6 战斗系统逐步接入）。 */
 export const KEYWORDS = [
