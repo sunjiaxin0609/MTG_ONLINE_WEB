@@ -20,6 +20,8 @@ export interface GameSocket {
   combat: CombatState;
   stack: StackItemLite[];
   send: (action: GameAction) => void;
+  /** 再来一局（服务端新建会话并广播初始状态）。 */
+  restart: () => void;
   clearError: () => void;
 }
 
@@ -92,6 +94,12 @@ export function useGameSocket(): GameSocket {
     }
   }, []);
 
+  const restart = useCallback(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'restart' }));
+    }
+  }, []);
+
   const clearError = useCallback(() => setError(null), []);
 
   return {
@@ -105,6 +113,7 @@ export function useGameSocket(): GameSocket {
     combat,
     stack,
     send,
+    restart,
     clearError,
   };
 }

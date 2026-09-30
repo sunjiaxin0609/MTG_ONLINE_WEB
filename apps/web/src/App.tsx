@@ -441,6 +441,11 @@ export default function App() {
             <div className="meta">
               第 {view.turn} 回合结束 · 你的生命 {me.life} / 对手生命 {opp.life}
             </div>
+            <div style={{ marginTop: 16 }}>
+              <button className="primary" onClick={game.restart}>
+                再来一局
+              </button>
+            </div>
           </div>
         </div>
       )}
