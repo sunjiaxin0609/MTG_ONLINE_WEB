@@ -67,17 +67,35 @@ describe('SQLite 卡池往返', () => {
   });
 });
 
-describe('M4 起始牌组 fixture', () => {
-  it('从卡池构建正好 60 张的牌组，且含地/生物/法术三类', () => {
+describe('起始牌组构建', () => {
+  function seedPool() {
     clearCards(db);
-    insertCard(db, makeCard({ id: 'l1', type_line: 'Basic Land — Plains', oracle_text: '{T}: Add {W}.' }), { legalStandard: true });
+    insertCard(db, makeCard({ id: 'l1', type_line: 'Basic Land — Plains', oracle_text: '({T}: Add {W}.)' }), { legalStandard: true });
     insertCard(db, makeCard({ id: 'c1', type_line: 'Creature — Bear', oracle_text: 'Flying', power: '2', toughness: '2' }), { legalStandard: true });
     insertCard(db, makeCard({ id: 's1', type_line: 'Sorcery', oracle_text: 'Deal 2 damage' }), { legalStandard: true });
+  }
 
+  it('构建 60 张牌组，构成为 20 地 / 16 生物 / 24 法术', () => {
+    seedPool();
     const deck = buildStandardDeck(db);
     expect(deck.length).toBe(60);
-    expect(deck.some((c) => c.category === 'land')).toBe(true);
-    expect(deck.some((c) => c.category === 'creature')).toBe(true);
-    expect(deck.some((c) => c.category === 'sorcery')).toBe(true);
+    const count = (cat: string) => deck.filter((c) => c.category === cat).length;
+    expect(count('land')).toBe(20);
+    expect(count('creature')).toBe(16);
+    expect(count('sorcery')).toBe(24);
+  });
+
+  it('牌组已洗牌：不会出现「前 20 张全是地」的分组顺序', () => {
+    seedPool();
+    const deck = buildStandardDeck(db);
+    // 未洗牌时前 20 张恰好是全部 20 张地；洗牌后该概率可忽略
+    expect(deck.slice(0, 20).some((c) => c.category !== 'land')).toBe(true);
+  });
+
+  it('两次构建的顺序不同（确实做了随机化）', () => {
+    seedPool();
+    const a = buildStandardDeck(db).map((c) => c.id);
+    const b = buildStandardDeck(db).map((c) => c.id);
+    expect(a).not.toEqual(b);
   });
 });
